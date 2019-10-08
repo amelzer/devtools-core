@@ -3,23 +3,23 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const React = require("react");
-const { PropTypes } = React;
-const ImPropTypes = require("react-immutable-proptypes");
+const { Component } = React;
+const PropTypes = require("prop-types");
 const { connect } = require("react-redux");
 const { bindActionCreators } = require("redux");
 const { getTabs, getFilterString, getConfig } = require("../selectors");
 const { getValue } = require("devtools-config");
 const LandingPage = React.createFactory(require("./LandingPage"));
 
-const LaunchpadApp = React.createClass({
-  displayName: "LaunchpadApp",
-
-  propTypes: {
-    tabs: ImPropTypes.map.isRequired,
-    filterString: PropTypes.string,
-    actions: PropTypes.object,
-    config: PropTypes.object
-  },
+class LaunchpadApp extends Component {
+  static get propTypes() {
+    return {
+      tabs: PropTypes.object.isRequired,
+      filterString: PropTypes.string,
+      actions: PropTypes.object,
+      config: PropTypes.object
+    };
+  }
 
   render() {
     const {
@@ -40,7 +40,7 @@ const LaunchpadApp = React.createClass({
       setValue
     });
   }
-});
+}
 
 function mapStateToProps(state) {
   return {

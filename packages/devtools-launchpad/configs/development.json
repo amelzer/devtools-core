@@ -5,10 +5,9 @@
   "favicon": "assets/launchpad-favicon.png",
   "theme": "light",
   "dir": "ltr",
+  "defaultURL": "https://firefox-devtools.github.io/debugger-examples/",
   "logging": {
-    "client": false,
-    "firefoxProxy": false,
-    "actions": false
+    "firefoxProxy": false
   },
   "development": {
     "serverPort": 8000,
@@ -26,7 +25,8 @@
   },
   "firefox": {
     "webSocketConnection": false,
-    "proxyHost": "localhost:9000",
-    "websocketHost": "localhost:6080"
+    "host": "localhost",
+    "webSocketPort": 9000,
+    "tcpPort": 6080
   }
 }

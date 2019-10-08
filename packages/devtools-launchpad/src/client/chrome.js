@@ -6,13 +6,12 @@
 
 const CDP = require("chrome-remote-interface");
 const { getValue } = require("devtools-config");
-const { networkRequest } = require("devtools-utils");
 
 import type { Tab } from "./types";
 
 type ChromeTab = Tab & {
   webSocketDebuggerUrl: string,
-  type: string,
+  type: string
 };
 
 let connection;
@@ -28,9 +27,29 @@ function createTabs(tabs: ChromeTab[], { type, clientType } = {}) {
         url: tab.url,
         id: tab.id,
         tab,
-        clientType,
+        clientType
       };
     });
+}
+
+// This helper is a simplified copy of devtools-utils/network-request
+function networkRequest(url: string) {
+  if (url.startsWith("data:application/json;")) {
+    const content = atob(url.slice(url.indexOf("base64") + 7));
+    return Promise.resolve({ content });
+  }
+
+  return Promise.race([
+    fetch(`/get?url=${url}`).then(res => {
+      if (res.status >= 200 && res.status < 300) {
+        return res.text().then(text => ({ content: text }));
+      }
+      return Promise.reject(new Error(`failed to request ${url}`));
+    }),
+    new Promise((resolve, reject) => {
+      setTimeout(() => reject(new Error("Connect timeout error")), 6000);
+    })
+  ]);
 }
 
 window.criRequest = function (options, callback) {
@@ -50,12 +69,12 @@ async function connectClient() {
   try {
     const tabs = await CDP.List({
       port: getValue("chrome.port"),
-      host: getValue("chrome.host"),
+      host: getValue("chrome.host")
     });
 
     return createTabs(tabs, {
       clientType: "chrome",
-      type: "page",
+      type: "page"
     });
   } catch (e) {
     return [];
@@ -71,7 +90,7 @@ async function connectNodeClient() {
   try {
     tabs = await CDP.List({
       port: getValue("node.port"),
-      host: getValue("node.host"),
+      host: getValue("node.host")
     });
   } catch (e) {
     return undefined;
@@ -79,7 +98,7 @@ async function connectNodeClient() {
 
   return createTabs(tabs, {
     clientType: "node",
-    type: "node",
+    type: "node"
   });
 }
 
@@ -120,5 +139,5 @@ module.exports = {
   connectNodeClient,
   connectNode,
   connectTab,
-  initPage,
+  initPage
 };

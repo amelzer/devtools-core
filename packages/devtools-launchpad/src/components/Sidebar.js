@@ -3,61 +3,91 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const React = require("react");
-
+const { Component } = React;
+const dom = require("react-dom-factories");
+const PropTypes = require("prop-types");
+const panelItems = require("../constants").sidePanelItems;
+const Svg = require("../../assets/Svg.js");
 require("./Sidebar.css");
-const { DOM: dom } = React;
-const classnames = require("classnames");
 
-const Sidebar = React.createClass({
-  displayName: "Sidebar",
+class Sidebar extends Component {
+  static get propTypes() {
+    return {
+      supportsFirefox: PropTypes.bool.isRequired,
+      supportsChrome: PropTypes.bool.isRequired,
+      title: PropTypes.string.isRequired,
+      selectedPane: PropTypes.string.isRequired,
+      onSideBarItemClick: PropTypes.func.isRequired
+    };
+  }
 
-  propTypes: {
-    supportsFirefox: React.PropTypes.bool.isRequired,
-    supportsChrome: React.PropTypes.bool.isRequired,
-    title: React.PropTypes.string.isRequired,
-    selectedPane: React.PropTypes.string.isRequired,
-    onSideBarItemClick: React.PropTypes.func.isRequired
-  },
+  constructor(props) {
+    super(props);
+    this.renderTitle = this.renderTitle.bind(this);
+    this.renderItem = this.renderItem.bind(this);
+  }
+
+  renderTitle(title) {
+    return dom.div(
+      { className: "sidebar-title" },
+      dom.h1({}, title),
+      dom.div(
+        { className: "sidebar-subtitle" },
+        Svg({ name: "rocket" }),
+        dom.h2({}, "Launchpad")
+      )
+    );
+  }
+
+  renderItem(title) {
+    const selected = title == this.props.selectedPane;
+
+    let displayTitle;
+    if (title === "Firefox") {
+      displayTitle = "Firefox Nightly";
+    }
+
+    return dom.li(
+      { key: title },
+      dom.a(
+        {
+          "aria-current": selected ? "page" : undefined,
+          href: "#" + title,
+          onClick: () => {
+            this.props.onSideBarItemClick(title);
+          }
+        },
+        displayTitle || title
+      )
+    );
+  }
 
   render() {
-    let connections = [];
+    let items = [];
 
     if (this.props.supportsFirefox) {
-      connections.push("Firefox");
+      items.push(panelItems.Firefox.name);
     }
 
     if (this.props.supportsChrome) {
-      connections.push("Chrome", "Node");
+      items.push(panelItems.Chrome.name, panelItems.Node.name);
     }
 
-    connections.push("Settings");
+    items.push(panelItems.Settings.name);
 
     return dom.aside(
       {
         className: "sidebar"
       },
-      dom.h1({}, this.props.title),
+      this.renderTitle(this.props.title),
       dom.ul(
-        {},
-        connections.map(title => dom.li(
-          {
-            className: classnames({
-              selected: title == this.props.selectedPane
-            }),
-            key: title,
-            tabIndex: 0,
-            role: "button",
-            onClick: () => this.props.onSideBarItemClick(title),
-            onKeyDown: e => {
-              if (e.keyCode === 13) {
-                this.props.onSideBarItemClick(title);
-              }
-            }
-          },
-          dom.a({}, title)
-        )))
+        {
+          className: "sidebar-links"
+        },
+        items.map(this.renderItem)
+      )
     );
   }
-});
+}
 
 module.exports = Sidebar;

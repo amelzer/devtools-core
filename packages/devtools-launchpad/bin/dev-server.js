@@ -2,14 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const fs = require("fs");
 const path = require("path");
 const feature = require("devtools-config");
 const toolbox = require("../index");
-const express = require("express");
 
-const envConfig = toolbox.developmentConfig;
-feature.setConfig(envConfig);
+const devConfig = toolbox.developmentConfig;
+feature.setConfig(devConfig);
 
 function buildwebpackConfig(envConfig) {
   let webpackConfig = {
@@ -20,20 +18,12 @@ function buildwebpackConfig(envConfig) {
     output: {
       path: path.join(__dirname, "assets/build"),
       filename: "[name].js",
-      publicPath: "/assets/build",
-      libraryTarget: "umd"
-    },
-
-    resolve: {
-      alias: {
-        "react-dom": "react-dom/dist/react-dom"
-      }
+      publicPath: "/assets/build"
     }
-  }
+  };
 
-  const config = toolbox.toolboxConfig(webpackConfig, envConfig);
-  return config
+  return toolbox.toolboxConfig(webpackConfig, envConfig);
 }
 
-const webpackConfig = buildwebpackConfig(envConfig);
-let { app } = toolbox.startDevServer(envConfig, webpackConfig, __dirname);
+const webpackConfig = buildwebpackConfig(devConfig);
+toolbox.startDevServer(devConfig, webpackConfig, __dirname);

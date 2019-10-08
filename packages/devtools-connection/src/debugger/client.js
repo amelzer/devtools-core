@@ -289,6 +289,8 @@ DebuggerClient.requester = function(aPacketSkeleton, config = {}) {
         if (histogram) {
           histogram.add(+new Date() - startTime);
         }
+
+        return aResponse;
       }, "DebuggerClient.requester request callback"),
     );
   }, "DebuggerClient.requester");
@@ -722,46 +724,54 @@ DebuggerClient.prototype = {
     if (!aRequest.to) {
       throw Error(`'${type}' request packet has no destination.`);
     }
+
+    // The aOnResponse callback might modify the response, so we need to call
+    // it and resolve the promise with its result if it's truthy.
+    const safeOnResponse = response => {
+      if (!aOnResponse) {
+        return response;
+      }
+      return aOnResponse(response) || response;
+    };
+
     if (this._closed) {
       let msg =
         `'${type}' request packet to ` +
         `'${aRequest.to}' ` +
         "can't be sent as the connection is closed.";
       let resp = { error: "connectionClosed", message: msg };
-      if (aOnResponse) {
-        aOnResponse(resp);
-      }
-      return promise.reject(resp);
+      return promise.reject(safeOnResponse(resp));
     }
 
     let request = new Request(aRequest);
     request.format = "json";
     request.stack = components.stack;
-    if (aOnResponse) {
-      request.on("json-reply", aOnResponse);
-    }
-
-    this._sendOrQueueRequest(request);
 
     // Implement a Promise like API on the returned object
     // that resolves/rejects on request response
     let deferred = promise.defer();
     function listenerJson(resp) {
-      request.off("json-reply", listenerJson);
-      request.off("bulk-reply", listenerBulk);
+      removeRequestListeners();
       if (resp.error) {
-        deferred.reject(resp);
+        deferred.reject(safeOnResponse(resp));
       } else {
-        deferred.resolve(resp);
+        deferred.resolve(safeOnResponse(resp));
       }
     }
     function listenerBulk(resp) {
+      removeRequestListeners();
+      deferred.resolve(safeOnResponse(resp));
+    }
+
+    const removeRequestListeners = () => {
       request.off("json-reply", listenerJson);
       request.off("bulk-reply", listenerBulk);
-      deferred.resolve(resp);
-    }
+    };
+
     request.on("json-reply", listenerJson);
     request.on("bulk-reply", listenerBulk);
+
+    this._sendOrQueueRequest(request);
     request.then = deferred.promise.then.bind(deferred.promise);
 
     return request;
@@ -1250,6 +1260,10 @@ DebuggerClient.prototype = {
    * Currently attached addon.
    */
   activeAddon: null,
+
+  createObjectClient: function(grip) {
+    return new ObjectClient(this, grip);
+  }
 };
 
 eventSource(DebuggerClient.prototype);
@@ -1609,6 +1623,20 @@ AddonClient.prototype = {
   ),
 };
 
+
+async function getDeviceFront() {
+  return {
+    getDescription: function () {
+      return {
+        // Return anything that will not match Fennec v60
+        apptype: "apptype",
+        version: "version"
+      };
+    }
+  };
+}
+
+
 /**
  * A RootClient object represents a root actor on the server. Each
  * DebuggerClient keeps a RootClient instance representing the root actor
@@ -1639,6 +1667,10 @@ exports.RootClient = RootClient;
 
 RootClient.prototype = {
   constructor: RootClient,
+
+  getFront: function(name) {
+    return getDeviceFront();
+  },
 
   /**
    * List the open tabs.
@@ -1823,6 +1855,10 @@ ThreadClient.prototype = {
    *        An object with a type property set to the appropriate limit (next,
    *        step, or finish) per the remote debugging protocol specification.
    *        Use null to specify no limit.
+   * @param bool aRewind
+   *        Whether execution should rewind until the limit is reached, rather
+   *        than proceeding forwards. This parameter has no effect if the
+   *        server does not support rewinding.
    * @param function aOnResponse
    *        Called with the response packet.
    */
@@ -1830,6 +1866,7 @@ ThreadClient.prototype = {
     {
       type: "resume",
       resumeLimit: args(0),
+      rewind: args(1)
     },
     {
       before: function(aPacket) {
@@ -1883,7 +1920,7 @@ ThreadClient.prototype = {
    * Resume a paused thread.
    */
   resume: function(aOnResponse) {
-    return this._doResume(null, aOnResponse);
+    return this._doResume(null, false, aOnResponse);
   },
 
   /**
@@ -1893,7 +1930,17 @@ ThreadClient.prototype = {
    *        Called with the response packet.
    */
   resumeThenPause: function(aOnResponse) {
-    return this._doResume({ type: "break" }, aOnResponse);
+    return this._doResume({ type: "break" }, false, aOnResponse);
+  },
+
+  /**
+   * Rewind a thread.
+   *
+   * @param function aOnResponse
+   *        Called with the response packet.
+   */
+  rewind: function(aOnResponse) {
+    this._doResume(null, true, aOnResponse);
   },
 
   /**
@@ -1903,7 +1950,7 @@ ThreadClient.prototype = {
    *        Called with the response packet.
    */
   stepOver: function(aOnResponse) {
-    return this._doResume({ type: "next" }, aOnResponse);
+    return this._doResume({ type: "next" }, false, aOnResponse);
   },
 
   /**
@@ -1913,7 +1960,7 @@ ThreadClient.prototype = {
    *        Called with the response packet.
    */
   stepIn: function(aOnResponse) {
-    return this._doResume({ type: "step" }, aOnResponse);
+    return this._doResume({ type: "step" }, false, aOnResponse);
   },
 
   /**
@@ -1923,7 +1970,37 @@ ThreadClient.prototype = {
    *        Called with the response packet.
    */
   stepOut: function(aOnResponse) {
-    return this._doResume({ type: "finish" }, aOnResponse);
+    return this._doResume({ type: "finish" }, false, aOnResponse);
+  },
+
+  /**
+   * Rewind step over a function call.
+   *
+   * @param function aOnResponse
+   *        Called with the response packet.
+   */
+  reverseStepOver: function (aOnResponse) {
+    return this._doResume({ type: "next" }, true, aOnResponse);
+  },
+
+  /**
+   * Rewind step into a function call.
+   *
+   * @param function aOnResponse
+   *        Called with the response packet.
+   */
+  reverseStepIn: function (aOnResponse) {
+    return this._doResume({ type: "step" }, true, aOnResponse);
+  },
+
+  /**
+   * Rewind step out of a function call.
+   *
+   * @param function aOnResponse
+   *        Called with the response packet.
+   */
+  reverseStepOut: function (aOnResponse) {
+    return this._doResume({ type: "finish" }, true, aOnResponse);
   },
 
   /**
@@ -2180,6 +2257,22 @@ ThreadClient.prototype = {
     },
   ),
 
+  /**
+   * Toggle pausing via breakpoints in the server.
+   *
+   * @param skip boolean
+   *        Whether the server should skip pausing via breakpoints
+   */
+  skipBreakpoints: DebuggerClient.requester({
+    type: "skipBreakpoints",
+    skip: args(0),
+  }),
+
+  /**
+   * Request the frame environment.
+   *
+   * @param frameId string
+   */
   getEnvironment: function(frameId) {
     return this.request({ to: frameId, type: "getEnvironment" });
   },
@@ -2327,6 +2420,37 @@ ThreadClient.prototype = {
   },
 
   /**
+   * Get or create an ArrayBuffer client, checking the grip client cache if it
+   * already exists.
+   *
+   * @param aGrip Object
+   *        The ArrayBuffer grip returned by the protocol.
+   * @param aGripCacheName String
+   *        The property name of the grip client cache to check for existing
+   *        clients in.
+   */
+  _arrayBuffer: function (aGrip, aGripCacheName) {
+    if (aGrip.actor in this[aGripCacheName]) {
+      return this[aGripCacheName][aGrip.actor];
+    }
+
+    let client = new ArrayBufferClient(this.client, aGrip);
+    this[aGripCacheName][aGrip.actor] = client;
+    return client;
+  },
+
+  /**
+   * Return an instance of ArrayBufferClient for the given ArrayBuffer grip that
+   * is scoped to the thread lifetime.
+   *
+   * @param aGrip Object
+   *        The ArrayBuffer grip returned by the protocol.
+   */
+  threadArrayBuffer: function (aGrip) {
+    return this._arrayBuffer(aGrip, "_threadGrips");
+  },
+
+  /**
    * Clear and invalidate all the grip clients from the given cache.
    *
    * @param aGripCacheName
@@ -2370,6 +2494,63 @@ ThreadClient.prototype = {
     aPacket.type === ThreadStateTypes.detached && this._clearThreadGrips();
     this.client._eventsEnabled && this.emit(aPacket.type, aPacket);
   },
+
+  setBreakpoint: DebuggerClient.requester({
+    type: "setBreakpoint",
+    location: args(0),
+    options: args(1)
+  }),
+
+  removeBreakpoint: DebuggerClient.requester({
+    type: "removeBreakpoint",
+    location: args(0),
+  }),
+
+  /**
+   * Requests to set XHR breakpoint
+   * @param string path
+   *        pause when url contains `path`
+   * @param string method
+   *        pause when method of request is `method`
+   */
+  setXHRBreakpoint: DebuggerClient.requester({
+    type: "setXHRBreakpoint",
+    path: args(0),
+    method: args(1)
+  }, {}),
+
+  /**
+   * Request to get the set of available event breakpoints.
+   */
+  getAvailableEventBreakpoints: DebuggerClient.requester({
+    type: "getAvailableEventBreakpoints",
+  }),
+
+  /**
+   * Request to get the IDs of the active event breakpoints.
+   */
+  getActiveEventBreakpoints: DebuggerClient.requester({
+    type: "getActiveEventBreakpoints",
+  }),
+
+  /**
+   * Request to set the IDs of the active event breakpoints.
+   */
+  setActiveEventBreakpoints: DebuggerClient.requester({
+    type: "setActiveEventBreakpoints",
+    ids: args(0),
+  }),
+
+  /**
+   * Request to remove XHR breakpoint
+   * @param string path
+   * @param string method
+   */
+  removeXHRBreakpoint: DebuggerClient.requester({
+    type: "removeXHRBreakpoint",
+    path: args(0),
+    method: args(1)
+  }, {}),
 
   getLastPausePacket: function() {
     return this._lastPausePacket;
@@ -2709,6 +2890,30 @@ ObjectClient.prototype = {
   ),
 
   /**
+   * Request a SymbolIteratorClient instance to enumerate symbols in an object.
+   *
+   * @param onResponse function Called with the request's response.
+   */
+  enumSymbols: DebuggerClient.requester({
+    type: "enumSymbols"
+  }, {
+    before: function (packet) {
+      if (this._grip.type !== "object") {
+        throw new Error("enumSymbols is only valid for objects grips.");
+      }
+      return packet;
+    },
+    after: function (response) {
+      if (response.iterator) {
+        return {
+          iterator: new SymbolIteratorClient(this._client, response.iterator)
+        };
+      }
+      return response;
+    }
+  }),
+
+  /**
    * Request the property descriptor of the object's specified property.
    *
    * @param aName string The name of the requested property.
@@ -2725,6 +2930,17 @@ ObjectClient.prototype = {
   ),
 
   /**
+   * Request the value of the object's specified property.
+   *
+   * @param name string The name of the requested property.
+   * @param onResponse function Called with the request's response.
+   */
+  getPropertyValue: DebuggerClient.requester({
+    type: "propertyValue",
+    name: args(0),
+  }),
+
+  /**
    * Request the prototype of the object.
    *
    * @param aOnResponse function Called with the request's response.
@@ -2737,6 +2953,19 @@ ObjectClient.prototype = {
       telemetry: "PROTOTYPE",
     },
   ),
+
+  /**
+   * Evaluate a callable object with context and arguments.
+   *
+   * @param context any The value to use as the function context.
+   * @param arguments Array<any> An array of values to use as the function's arguments.
+   * @param onResponse function Called with the request's response.
+   */
+  apply: DebuggerClient.requester({
+    type: "apply",
+    context: args(0),
+    arguments: args(1),
+  }),
 
   /**
    * Request the display string of the object.
@@ -2931,6 +3160,102 @@ PropertyIteratorClient.prototype = {
 };
 
 /**
+ * A SymbolIteratorClient provides a way to access to symbols
+ * of an object efficiently, slice by slice.
+ *
+ * @param client DebuggerClient
+ *        The debugger client parent.
+ * @param grip Object
+ *        A SymbolIteratorActor grip returned by the protocol via
+ *        TabActor.enumSymbols request.
+ */
+function SymbolIteratorClient(client, grip) {
+  this._grip = grip;
+  this._client = client;
+  this.request = this._client.request;
+}
+
+SymbolIteratorClient.prototype = {
+  get actor() {
+    return this._grip.actor;
+  },
+
+  /**
+   * Get the total number of symbols available in the iterator.
+   */
+  get count() {
+    return this._grip.count;
+  },
+
+  /**
+   * Get a set of following symbols.
+   *
+   * @param start Number
+   *        The index of the first symbol to fetch.
+   * @param count Number
+   *        The number of symbols to fetch.
+   * @param callback Function
+   *        The function called when we receive the symbols.
+   */
+  slice: DebuggerClient.requester({
+    type: "slice",
+    start: args(0),
+    count: args(1)
+  }, {}),
+
+  /**
+   * Get all the symbols.
+   *
+   * @param callback Function
+   *        The function called when we receive the symbols.
+   */
+  all: DebuggerClient.requester({
+    type: "all"
+  }, {}),
+};
+
+/**
+ * A ArrayBufferClient provides a way to access ArrayBuffer from the
+ * debugger server.
+ *
+ * @param aClient DebuggerClient
+ *        The debugger client parent.
+ * @param aGrip Object
+ *        A pause-lifetime ArrayBuffer grip returned by the protocol.
+ */
+function ArrayBufferClient(aClient, aGrip) {
+  this._grip = aGrip;
+  this._client = aClient;
+  this.request = this._client.request;
+}
+exports.ArrayBufferClient = ArrayBufferClient;
+
+ArrayBufferClient.prototype = {
+  get actor() {
+    return this._grip.actor;
+  },
+  get length() {
+    return this._grip.length;
+  },
+  get _transport() {
+    return this._client._transport;
+  },
+
+  valid: true,
+
+  slice: DebuggerClient.requester(
+    {
+      type: "slice",
+      start: args(0),
+      count: args(1),
+    },
+    {
+      telemetry: "SLICE",
+    },
+  ),
+};
+
+/**
  * A LongStringClient provides a way to access "very long" strings from the
  * debugger server.
  *
@@ -3029,6 +3354,7 @@ SourceClient.prototype = {
   blackBox: DebuggerClient.requester(
     {
       type: "blackbox",
+      range: args(0)
     },
     {
       telemetry: "BLACKBOX",
@@ -3044,6 +3370,11 @@ SourceClient.prototype = {
     },
   ),
 
+  getBreakpointPositions: DebuggerClient.requester({
+    type: "getBreakpointPositions",
+    query: args(0)
+  }),
+
   /**
    * Un-black box this SourceClient's source.
    *
@@ -3053,6 +3384,7 @@ SourceClient.prototype = {
   unblackBox: DebuggerClient.requester(
     {
       type: "unblackbox",
+      range: args(0)
     },
     {
       telemetry: "UNBLACKBOX",
@@ -3068,22 +3400,27 @@ SourceClient.prototype = {
     },
   ),
 
-  /**
-   * Get Executable Lines from a source
-   *
-   * @param aCallback Function
-   *        The callback function called when we receive the response from the server.
-   */
-  getExecutableLines: function(cb = noop) {
-    let packet = {
+  getBreakableLines: function() {
+    return this._client.request({
       to: this._form.actor,
-      type: "getExecutableLines",
-    };
+      type: "getBreakableLines"
+    }).then(r => r.lines);
+  },
 
-    return this._client.request(packet).then(res => {
-      cb(res.lines);
-      return res.lines;
-    });
+  getBreakpointPositions: function(query) {
+    return this._client.request({
+      to: this._form.actor,
+      type: "getBreakpointPositions",
+      query,
+    }).then(r => r.positions);
+  },
+
+  getBreakpointPositionsCompressed: function(query) {
+    return this._client.request({
+      to: this._form.actor,
+      type: "getBreakpointPositionsCompressed",
+      query,
+    }).then(r => r.positions);
   },
 
   /**
@@ -3148,6 +3485,29 @@ SourceClient.prototype = {
     }
 
     let { contentType, source } = aResponse;
+
+    if (source.type === 'arrayBuffer') {
+      let arrayBuffer = this._activeThread.threadArrayBuffer(source);
+      return arrayBuffer.slice(0, arrayBuffer.length).then(function (resp) {
+        if (resp.error) {
+          aCallback(resp);
+          return resp;
+        }
+        // Keeping str as a string, ArrayBuffer/Uint8Array will not survive
+        // immutable operations.
+        const str = atob(resp.encoded);
+        let newResponse = {
+          source: {
+            "binary": str,
+            toString: "[wasm]",
+          },
+          contentType: contentType,
+        };
+        aCallback(newResponse);
+        return newResponse;
+      });
+    }
+
     let longString = this._activeThread.threadLongString(source);
     return longString.substring(0, longString.length).then(function(aResponse) {
       if (aResponse.error) {
@@ -3162,218 +3522,8 @@ SourceClient.prototype = {
       aCallback(response);
       return response;
     });
-  },
-
-  /**
-   * Request to set a breakpoint in the specified location.
-   *
-   * @param object aLocation
-   *        The location and condition of the breakpoint in
-   *        the form of { line[, column, condition] }.
-   * @param function aOnResponse
-   *        Called with the thread's response.
-   */
-  setBreakpoint: function(
-    { line, column, condition, noSliding },
-    onResponse = noop,
-  ) {
-    // A helper function that sets the breakpoint.
-    let doSetBreakpoint = aCallback => {
-      let root = this._client.mainRoot;
-      let location = {
-        line: line,
-        column: column,
-      };
-
-      let packet = {
-        to: this.actor,
-        type: "setBreakpoint",
-        location: location,
-        condition: condition,
-        noSliding: noSliding,
-      };
-
-      // Backwards compatibility: send the breakpoint request to the
-      // thread if the server doesn't support Debugger.Source actors.
-      if (!root.traits.debuggerSourceActors) {
-        packet.to = this._activeThread.actor;
-        packet.location.url = this.url;
-      }
-
-      return this._client.request(packet).then(response => {
-        // Ignoring errors, since the user may be setting a breakpoint in a
-        // dead script that will reappear on a page reload.
-        let bpClient;
-        if (response.actor) {
-          bpClient = new BreakpointClient(
-            this._client,
-            this,
-            response.actor,
-            location,
-            root.traits.conditionalBreakpoints ? condition : undefined,
-          );
-        }
-        onResponse(response, bpClient);
-        if (aCallback) {
-          aCallback();
-        }
-        return [response, bpClient];
-      });
-    };
-
-    // If the debuggee is paused, just set the breakpoint.
-    if (this._activeThread.paused) {
-      return doSetBreakpoint();
-    }
-    // Otherwise, force a pause in order to set the breakpoint.
-    return this._activeThread.interrupt().then(aResponse => {
-      if (aResponse.error) {
-        // Can't set the breakpoint if pausing failed.
-        onResponse(aResponse);
-        return aResponse;
-      }
-
-      const { type, why } = aResponse;
-      const cleanUp = type == "paused" && why.type == "interrupted"
-        ? () => this._activeThread.resume()
-        : noop;
-
-      return doSetBreakpoint(cleanUp);
-    });
-  },
-};
-
-/**
- * Breakpoint clients are used to remove breakpoints that are no longer used.
- *
- * @param aClient DebuggerClient
- *        The debugger client parent.
- * @param aSourceClient SourceClient
- *        The source where this breakpoint exists
- * @param aActor string
- *        The actor ID for this breakpoint.
- * @param aLocation object
- *        The location of the breakpoint. This is an object with two properties:
- *        url and line.
- * @param aCondition string
- *        The conditional expression of the breakpoint
- */
-function BreakpointClient(
-  aClient,
-  aSourceClient,
-  aActor,
-  aLocation,
-  aCondition,
-) {
-  this._client = aClient;
-  this._actor = aActor;
-  this.location = aLocation;
-  this.location.actor = aSourceClient.actor;
-  this.location.url = aSourceClient.url;
-  this.source = aSourceClient;
-  this.request = this._client.request;
-
-  // The condition property should only exist if it's a truthy value
-  if (aCondition) {
-    this.condition = aCondition;
   }
-}
-
-BreakpointClient.prototype = {
-  _actor: null,
-  get actor() {
-    return this._actor;
-  },
-  get _transport() {
-    return this._client._transport;
-  },
-
-  /**
-   * Remove the breakpoint from the server.
-   */
-  remove: DebuggerClient.requester(
-    {
-      type: "delete",
-    },
-    {
-      telemetry: "DELETE",
-    },
-  ),
-
-  /**
-   * Determines if this breakpoint has a condition
-   */
-  hasCondition: function() {
-    let root = this._client.mainRoot;
-    // XXX bug 990137: We will remove support for client-side handling of
-    // conditional breakpoints
-    if (root.traits.conditionalBreakpoints) {
-      return "condition" in this;
-    }
-    return "conditionalExpression" in this;
-  },
-
-  /**
-   * Get the condition of this breakpoint. Currently we have to
-   * support locally emulated conditional breakpoints until the
-   * debugger servers are updated (see bug 990137). We used a
-   * different property when moving it server-side to ensure that we
-   * are testing the right code.
-   */
-  getCondition: function() {
-    let root = this._client.mainRoot;
-    if (root.traits.conditionalBreakpoints) {
-      return this.condition;
-    }
-    return this.conditionalExpression;
-  },
-
-  /**
-   * Set the condition of this breakpoint
-   */
-  setCondition: function(gThreadClient, aCondition, noSliding) {
-    let root = this._client.mainRoot;
-    let deferred = promise.defer();
-
-    if (root.traits.conditionalBreakpoints) {
-      let info = {
-        line: this.location.line,
-        column: this.location.column,
-        condition: aCondition,
-        noSliding,
-      };
-
-      // Remove the current breakpoint and add a new one with the
-      // condition.
-      this.remove(aResponse => {
-        if (aResponse && aResponse.error) {
-          deferred.reject(aResponse);
-          return;
-        }
-
-        this.source.setBreakpoint(info, (aResponse, aNewBreakpoint) => {
-          if (aResponse && aResponse.error) {
-            deferred.reject(aResponse);
-          } else {
-            deferred.resolve(aNewBreakpoint);
-          }
-        });
-      });
-    } else {
-      // The property shouldn't even exist if the condition is blank
-      if (aCondition === "") {
-        delete this.conditionalExpression;
-      } else {
-        this.conditionalExpression = aCondition;
-      }
-      deferred.resolve(this);
-    }
-
-    return deferred.promise;
-  },
 };
-
-eventSource(BreakpointClient.prototype);
 
 /**
  * Environment clients are used to manipulate the lexical environment actors.

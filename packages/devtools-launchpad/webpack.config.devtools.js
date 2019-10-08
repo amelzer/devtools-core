@@ -5,24 +5,25 @@ const { NormalModuleReplacementPlugin } = webpack;
 const { DefinePlugin } = webpack;
 
 const nativeMapping = {
-  "./src/source-editor": "devtools/client/sourceeditor/editor",
-  "./test-flag": "devtools/shared/flags",
   react: "devtools/client/shared/vendor/react",
   "react-dom": "devtools/client/shared/vendor/react-dom",
+  "react-dom-factories": "devtools/client/shared/vendor/react-dom-factories",
+  "prop-types": "devtools/client/shared/vendor/react-prop-types",
+  lodash: "devtools/client/shared/vendor/lodash"
 };
 
-let packagesPath = path.join(__dirname, "../");
 const rootDir = path.join(__dirname, "../..");
 const outputPath = process.env.OUTPUT_PATH;
 
-module.exports = (webpackConfig, envConfig) => {
+module.exports = (webpackConfig, envConfig, options) => {
   if (outputPath) {
     webpackConfig.output.path = outputPath;
   }
 
   webpackConfig.devtool = false;
-  webpackConfig.recordsPath = path.join(rootDir, "assets/module-manifest.json");
-
+  const recordsPath =  options.recordsPath || "assets/module-manifest.json"
+  webpackConfig.recordsPath = path.join(rootDir, recordsPath);
+  
   function externalsTest(context, request, callback) {
     let mod = request;
 
@@ -32,8 +33,9 @@ module.exports = (webpackConfig, envConfig) => {
     }
 
     // Any matching paths here won't be included in the bundle.
-    if (nativeMapping[mod]) {
-      const mapping = nativeMapping[mod];
+    const excludeMap = (options && options.excludeMap) || nativeMapping;
+    if (excludeMap[mod]) {
+      const mapping = excludeMap[mod];
 
       if (webpackConfig.externalsRequire) {
         // If the tool defines "externalsRequire" in the webpack config, wrap

@@ -75,7 +75,10 @@ declare module "debugger-html" {
     id: SourceId,
     url?: string,
     sourceMapURL?: string,
-  };
+    isWasm: boolean,
+    text?: string,
+    contentType?: string,
+};
 
   /**
    * Frame ID
@@ -182,6 +185,32 @@ declare module "debugger-html" {
   };
 
   /**
+   * SourceScope
+   * @memberof types
+   * @static
+   */
+  declare type SourceScope = {
+    type: string,
+    start: Location,
+    end: Location,
+    bindings: {
+      [name: string]: Location[]
+    }
+  };
+
+  /*
+   * MappedScopeBindings
+   * @memberof types
+   * @static
+   */
+  declare type MappedScopeBindings = {
+    type: string,
+    bindings: {
+      [originalName: string]: string
+    }
+  };
+
+  /**
    * Script
    * This describes scripts which are sent to the debug server to be eval'd
    * @memberof types
@@ -189,6 +218,11 @@ declare module "debugger-html" {
    * FIXME: This needs a real type definition
    */
   declare type Script = any;
+
+  declare type SyntheticScope = {
+    type: string,
+    bindingsNames: string[]
+  };
 
   /**
    * Scope
@@ -210,6 +244,11 @@ declare module "debugger-html" {
       location: Location,
       // FIXME Define this type more clearly
       parameterNames: Array<Object>,
+    },
+    syntheticScopes?: {
+      scopes: SyntheticScope[],
+      groupIndex: number,
+      groupLength: number
     },
     type: string,
   };

@@ -4,6 +4,8 @@
 
 const toolbox = require("../../../index");
 const path = require("path");
+const postcss = require("postcss");
+const postcssConfig = require("../../../postcss.config");
 
 // NOTE: we can likely switch this out for an appropriate path function
 function getLocalPath(filepath) {
@@ -19,21 +21,16 @@ describe("Webpack config", () => {
     expect(getLocalPath(config.context)).toBe(
       path.normalize("/packages/devtools-launchpad/src")
     );
-
-    const roots = config.resolveLoader.root;
-    expect(getLocalPath(roots[0])).toBe(
-      path.normalize("/packages/devtools-launchpad/node_modules")
-    );
   });
 
   it("JS excludes rules", () => {
-    const webpackConfig = {
+    const options = {
       babelExcludes: /poop/
     };
     const envConfig = {};
-    const config = toolbox.toolboxConfig(webpackConfig, envConfig);
+    const config = toolbox.toolboxConfig({}, envConfig, options);
 
-    const loaders = config.module.loaders;
+    const loaders = config.module.rules;
     const jsLoader = loaders[1];
     const jsExclude = jsLoader.exclude;
     // console.log(Object.values(loaders).map(l => l.test));
@@ -47,5 +44,31 @@ describe("Webpack config", () => {
 
     expect(jsExclude("node_modules/devtools-config")).toBe(false);
     expect(jsExclude("./foo")).toBe(false);
+  });
+
+  describe("postcss", () => {
+    it("maps chrome urls in development", async () => {
+      const css = `a { background: 'url("chrome://devtools/skin/poop.svg")' }`;
+
+      const out = await postcss(
+        postcssConfig({ file: null, options: {}, env: "test" })
+      ).process(css);
+
+      expect(out.css).toEqual(
+        "a { background: 'url(\"/mc/devtools/client/themes/poop.svg\")' }"
+      );
+    });
+
+    it("maps chrome urls in production", async () => {
+      const css = `a { background: 'url("/images/poop.svg")' }`;
+
+      const out = await postcss(
+        postcssConfig({ file: null, options: {}, env: "production" })
+      ).process(css);
+
+      expect(out.css).toEqual(
+        `a { background: 'url("chrome://devtools/skin/images/debugger/poop.svg")' }`
+      );
+    });
   });
 });

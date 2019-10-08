@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+ /* eslint-env node */
+
 require("babel-register");
 
 const path = require("path");
@@ -10,6 +12,7 @@ const fs = require("fs");
 const Mustache = require("mustache");
 const webpack = require("webpack");
 const express = require("express");
+const serve = require("express-static");
 const bodyParser = require("body-parser");
 const webpackDevMiddleware = require("webpack-dev-middleware");
 const webpackHotMiddleware = require("webpack-hot-middleware");
@@ -23,24 +26,27 @@ const {
   getValue,
   setValue
 } = require("devtools-config");
-const isDevelopment = require("devtools-config").isDevelopment;
+const isDevelopment = require("devtools-environment").isDevelopment;
 const { handleLaunchRequest } = require("./server/launch");
+const NODE_VERSION = require("../package.json").engines.node;
+const mime = require("mime-types");
 let root;
 
 function httpOrHttpsGet(url, onResponse) {
   let protocol = url.startsWith("https:") ? https : http;
 
-  return protocol.get(url, (response) => {
+  return protocol.get(url, response => {
     if (response.statusCode !== 200) {
       console.error(`error response: ${response.statusCode} to ${url}`);
       response.emit("statusCode", new Error(response.statusCode));
       return onResponse("{}");
     }
-    let body = "";
-    response.on("data", function (d) {
-      body += d;
+    const contentType = response.headers["content-type"];
+    let body = Buffer.alloc(0);
+    response.on("data", (data) => {
+      body = Buffer.concat([body, data]);
     });
-    response.on("end", () => onResponse(body));
+    response.on("end", () => onResponse({ body, contentType }));
 
     return undefined;
   });
@@ -59,34 +65,41 @@ function getFavicon() {
 function serveRoot(req, res) {
   const tplPath = path.join(__dirname, "../index.html");
   const tplFile = fs.readFileSync(tplPath, "utf8");
-  const bundleName = getValue("title") ?
-    getValue("title").toLocaleLowerCase() : "bundle";
+  const bundleName = getValue("title")
+    ? getValue("title").toLocaleLowerCase()
+    : "bundle";
 
-  res.send(Mustache.render(tplFile, {
-    isDevelopment: isDevelopment(),
-    dir: getValue("dir") || "ltr",
-    bundleName,
-    title: getValue("title") || "Launchpad",
-    favicon: getFavicon()
-  }));
+  res.send(
+    Mustache.render(tplFile, {
+      isDevelopment: isDevelopment(),
+      dir: getValue("dir") || "ltr",
+      bundleName,
+      title: getValue("title") || "Launchpad",
+      favicon: getFavicon()
+    })
+  );
 }
 
 function handleNetworkRequest(req, res) {
   const url = req.query.url;
   if (url.indexOf("file://") === 0) {
     const _path = url.replace("file://", "");
-    res.json(JSON.parse(fs.readFileSync(_path, "utf8")));
+    const mimeType = mime.lookup(_path);
+    if (mimeType) {
+      res.set("Content-Type", mimeType);
+    }
+    res.send(fs.readFileSync(_path));
   } else {
-    const httpReq = httpOrHttpsGet(
-      req.query.url,
-      body => {
-        try {
-          res.send(body);
-        } catch (e) {
-          res.status(500).send("Malformed json");
-        }
+    const httpReq = httpOrHttpsGet(req.query.url, ({ body, contentType }) => {
+      if (contentType) {
+        res.set("Content-Type", contentType);
       }
-    );
+      try {
+        res.send(body);
+      } catch (e) {
+        res.status(500).send(`Network error: ${e}`);
+      }
+    });
 
     httpReq.on("error", err => res.status(500).send(err.code));
     httpReq.on("statusCode", err => res.status(err.message).send(err.message));
@@ -111,25 +124,34 @@ function onRequest(err, result) {
   if (err) {
     console.log(err);
   } else {
-    console.log(`Development Server Listening at http://localhost:${serverPort}`);
+    console.log(
+      `Development Server Listening at http://localhost:${serverPort}`
+    );
   }
 }
 
 function startDevServer(devConfig, webpackConfig, rootDir) {
   setConfig(devConfig);
   root = rootDir;
-  checkNode(">=6.9.0", function (_, opts) {
-    if (!opts.nodeSatisfied) {
-      const version = opts.node.raw;
-      console.log(`Sorry, Your version of node is ${version}.`);
-      console.log("The minimum requirement is >=6.9.0");
+  checkNode({ node: NODE_VERSION }, (_, result) => {
+    if (!result.isSatisfied) {
+      const currentVersion = result.versions.node.version
+        ? result.versions.node.version.version
+        : "UNKNOWN";
+      console.log(`Sorry, Your version of node is ${currentVersion}.`);
+      console.log(`The minimum requirement is ${NODE_VERSION}`);
       process.exit();
     }
   });
 
   if (!getValue("firefox.webSocketConnection")) {
     const firefoxProxy = require("../bin/firefox-proxy");
-    firefoxProxy({ logging: getValue("logging.firefoxProxy") });
+    firefoxProxy({
+      host: getValue("firefox.host"),
+      webSocketPort: getValue("firefox.webSocketPort"),
+      tcpPort: getValue("firefox.tcpPort"),
+      logging: getValue("logging.firefoxProxy")
+    });
   }
 
   // setup app
@@ -144,9 +166,11 @@ function startDevServer(devConfig, webpackConfig, rootDir) {
 
   app.use(express.static(faviconDir));
 
-  app.use(bodyParser.urlencoded({
-    extended: true
-  }));
+  app.use(
+    bodyParser.urlencoded({
+      extended: true
+    })
+  );
 
   app.use(bodyParser.json());
 
@@ -159,23 +183,34 @@ function startDevServer(devConfig, webpackConfig, rootDir) {
   app.get("/getconfig", handleGetConfig);
   app.post("/setconfig", handleSetConfig);
 
+  const assetsPath = path.join(
+    path.dirname(require.resolve("devtools-mc-assets", { basedir: __dirname })),
+    "assets"
+  );
+
+  app.use("/mc", serve(assetsPath));
+  app.use("/pad-assets", serve(path.join(__dirname, "../assets")));
+
   const serverPort = getValue("development.serverPort");
   app.listen(serverPort, "0.0.0.0", onRequest);
 
   const compiler = webpack(webpackConfig);
-  app.use(webpackDevMiddleware(compiler, {
-    publicPath: webpackConfig.output.publicPath,
-    noInfo: true,
-    stats: {
-      colors: true,
-      chunks: false
-    }
-  }));
+  const firstConfig =
+    Array.isArray(webpackConfig) ? webpackConfig[0] : webpackConfig;
+  app.use(
+    webpackDevMiddleware(compiler, {
+      publicPath: firstConfig.output.publicPath,
+      noInfo: false,
+      stats: "errors-only"
+    })
+  );
 
   if (getValue("hotReloading")) {
     app.use(webpackHotMiddleware(compiler));
   } else {
-    console.log("Hot Reloading - https://github.com/devtools-html/debugger.html/blob/master/docs/local-development.md#hot-reloading");
+    console.log(
+      "Hot Reloading - https://github.com/firefox-devtools/debugger.html/blob/master/docs/local-development.md#hot-reloading"
+    );
   }
 
   return { express, app };

@@ -244,12 +244,13 @@ export type TabTarget = {
       func: Function,
       params?: { frameActor?: FrameId }
     ) => void,
+    longString: (Object) => Object,
   },
   form: { consoleActor: any },
   activeTab: {
     navigateTo: (string) => Promise<*>,
     reload: () => Promise<*>,
-    attachThread: () => Promise<*>
+    attachThread: (thread: any) => Promise<*>
   },
   destroy: () => void,
 };

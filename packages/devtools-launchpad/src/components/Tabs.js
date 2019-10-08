@@ -5,26 +5,33 @@
 const React = require("react");
 
 require("./Tabs.css");
-const { DOM: dom } = React;
+const { Component } = React;
+const dom = require("react-dom-factories");
+const PropTypes = require("prop-types");
 const classnames = require("classnames");
 
 function getTabURL(tab, paramName) {
   const tabID = tab.get("id");
-  return `/?${paramName}=${tabID}`;
+  return `/?react_perf&${paramName}=${tabID}`;
 }
 
-const Tabs = React.createClass({
-  displayName: "Tabs",
+class Tabs extends Component {
+  static get propTypes() {
+    return {
+      targets: PropTypes.object.isRequired,
+      paramName: PropTypes.string.isRequired,
+      onTabClick: PropTypes.func.isRequired,
+    };
+  }
 
-  propTypes: {
-    targets: React.PropTypes.object.isRequired,
-    paramName: React.PropTypes.string.isRequired,
-    onTabClick: React.PropTypes.func.isRequired,
-  },
+  constructor(props) {
+    super(props);
+    this.onTabClick = this.onTabClick.bind(this);
+  }
 
   onTabClick(tab, paramName) {
     this.props.onTabClick(getTabURL(tab, paramName));
-  },
+  }
 
   render() {
     const { targets, paramName } = this.props;
@@ -39,7 +46,7 @@ const Tabs = React.createClass({
     }
 
     return dom.div(
-      { className: "tab-group" },
+      { className: "launchpad-tabs" },
       dom.ul(
         { className: "tab-list" },
         targets.valueSeq().map(
@@ -64,7 +71,6 @@ const Tabs = React.createClass({
       )
     );
   }
-
-});
+}
 
 module.exports = Tabs;

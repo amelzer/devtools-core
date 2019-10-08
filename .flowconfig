@@ -1,9 +1,18 @@
 [ignore]
+.*node_modules/autoprefixer.*
+.*node_modules/babel-plugin-react-docgen.*
+.*node_modules/chalk.*
 .*node_modules/cjson.*
 .*node_modules/fbjs.*
 .*node_modules/npm.*
 .*node_modules/stylelint.*
 .*node_modules/config-chain.*
+.*node_modules/conventional-changelog-core.*
+.*node_modules/devtools-mc-assets.*
+.*node_modules/postcss-*
+.*node_modules/radium.*
+.*node_modules/react-style-proptype.*
+.*node_modules/chalk*
 .*flow-coverage-report/.*
 .*custom_format_broken.json
 

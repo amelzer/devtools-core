@@ -5,44 +5,47 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const minimist = require("minimist");
-const url = require('url');
-var path = require('path');
+const url = require("url");
+var path = require("path");
 const webdriver = require("selenium-webdriver");
 const firefox = require("selenium-webdriver/firefox");
 const isWindows = /^win/.test(process.platform);
 
-addGeckoDriverToPath()
+addGeckoDriverToPath();
 
 const By = webdriver.By;
 const until = webdriver.until;
 const Key = webdriver.Key;
 
-const args = minimist(process.argv.slice(2),
-{
+const args = minimist(process.argv.slice(2), {
   boolean: ["start", "tests", "websocket"],
-  string: ["location"],
+  string: ["location"]
 });
 
 const shouldStart = args.start;
 const isTests = args.tests;
-const useWebSocket = args.websocket;
+let useWebSocket = args.websocket;
+let connectionPort = 6080;
 
 function addGeckoDriverToPath() {
   // NOTE: when the launchpad is symlinked we ned to check for
   // geckodriver in a different location
   const isSymLinked = __dirname.match(/devtools-core/);
-  const relativeGeckoPath = isSymLinked ?
-    '../node_modules/geckodriver' : '../../geckodriver';
+  const relativeGeckoPath = isSymLinked
+    ? "../node_modules/geckodriver"
+    : "../../geckodriver";
   const geckoDriverPath = path.resolve(__dirname, relativeGeckoPath);
   process.env.PATH = `${geckoDriverPath}${path.delimiter}${process.env.PATH}`;
 }
 
 function binaryArgs() {
-	if (isWindows) {
-		return [ "-start-debugger-server", useWebSocket ? "ws:6080" : "6080" ]  // e.g. -start-debugger-server 6080
-  }
-	else {
-		return ["--start-debugger-server=" + (useWebSocket ? "ws:6080" : "6080")] // e.g. --start-debugger-server=6080
+  const connectionString = useWebSocket
+    ? `ws:${connectionPort}`
+    : `${connectionPort}`;
+  if (isWindows) {
+    return ["-start-debugger-server", connectionString]; // e.g. -start-debugger-server 6080
+  } else {
+    return ["--start-debugger-server=" + connectionString]; // e.g. --start-debugger-server=6080
   }
 }
 
@@ -57,7 +60,7 @@ function firefoxBinary() {
 function firefoxProfile() {
   let profile = new firefox.Profile();
 
-  profile.setPreference("devtools.debugger.remote-port", 6080);
+  profile.setPreference("devtools.debugger.remote-port", connectionPort);
   profile.setPreference("devtools.debugger.remote-enabled", true);
   profile.setPreference("devtools.chrome.enabled", true);
   profile.setPreference("devtools.debugger.prompt-connection", false);
@@ -67,11 +70,26 @@ function firefoxProfile() {
   return profile;
 }
 
-function start(_url) {
+function start(_url, _options = {}) {
+  if (_options.useWebSocket) {
+    useWebSocket = true;
+    connectionPort = _options.webSocketPort
+      ? _options.webSocketPort
+      : connectionPort;
+  } else {
+    connectionPort = _options.tcpPort ? _options.tcpPort : connectionPort;
+  }
+
   let options = new firefox.Options();
 
+  let nightlyChannel = new firefox.Channel(
+    "/Applications/Firefox Nightly.app/Contents/MacOS/firefox-bin",
+    "Firefox Nightly\\firefox.exe"
+  )
+
   options.setProfile(firefoxProfile());
-  options.setBinary(firefoxBinary());
+  options.setBinary(nightlyChannel);
+  options.args_ = binaryArgs();
 
   const driver = new webdriver.Builder()
     .forBrowser("firefox")
@@ -80,7 +98,7 @@ function start(_url) {
 
   let location = url.parse(_url);
   if (location.protocol === null) {
-    location.protocol = 'http:';
+    location.protocol = "http:";
   }
   driver.get(url.format(location));
 
@@ -88,15 +106,15 @@ function start(_url) {
 }
 
 if (shouldStart) {
-  const location = args.location || 'about:blank';
-  const driver = start(location);
+  start(args.location || "about:blank");
   setInterval(() => {}, 100);
 }
 
 function getResults(driver) {
   driver
     .findElement(By.id("mocha-stats"))
-    .getText().then(results => {
+    .getText()
+    .then(results => {
       console.log("results ", results);
       const match = results.match(/failures: (\d*)/);
       const resultCode = parseInt(match[1], 10) > 0 ? 1 : 0;

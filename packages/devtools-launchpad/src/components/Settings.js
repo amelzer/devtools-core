@@ -3,16 +3,26 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const React = require("react");
-const { DOM: dom } = React;
-const { showMenu, buildMenu } = require("./shared/menu");
+const { Component } = React;
+const dom = require("react-dom-factories");
+const PropTypes = require("prop-types");
+const { showMenu, buildMenu } = require("devtools-contextmenu");
 
-const Settings = React.createClass({
-  displayName: "Settings",
+class Settings extends Component {
+  static get propTypes() {
+    return {
+      config: PropTypes.object.isRequired,
+      setValue: PropTypes.func.isRequired
+    };
+  }
 
-  propTypes: {
-    config: React.PropTypes.object.isRequired,
-    setValue: React.PropTypes.func.isRequired
-  },
+  constructor(props) {
+    super(props);
+    this.onConfigContextMenu = this.onConfigContextMenu.bind(this);
+    this.onInputHandler = this.onInputHandler.bind(this);
+    this.renderConfig = this.renderConfig.bind(this);
+    this.renderFeatures = this.renderFeatures.bind(this);
+  }
 
   onConfigContextMenu(event, key) {
     event.preventDefault();
@@ -51,13 +61,6 @@ const Settings = React.createClass({
       click: () => setConfig(key, "dark")
     };
 
-    const firebugMenuItem = {
-      id: "node-menu-firebug",
-      label: "firebug",
-      disabled: config[key] === "firebug",
-      click: () => setConfig(key, "firebug")
-    };
-
     const items = {
       "dir": [
         { item: ltrMenuItem },
@@ -66,16 +69,15 @@ const Settings = React.createClass({
       "theme": [
         { item: lightMenuItem },
         { item: darkMenuItem },
-        { item: firebugMenuItem }
       ]
     };
     showMenu(event, buildMenu(items[key]));
-  },
+  }
 
   onInputHandler(e, path) {
     const { setValue } = this.props;
     setValue(path, e.target.checked);
-  },
+  }
 
   renderConfig(config) {
     const configs = [
@@ -101,7 +103,7 @@ const Settings = React.createClass({
         );
       })
     );
-  },
+  }
 
   renderFeatures(features) {
     return dom.ul(
@@ -127,13 +129,13 @@ const Settings = React.createClass({
         )
       ))
     );
-  },
+  }
 
   render() {
     const { config } = this.props;
 
     return dom.div(
-      { className: "tab-group" },
+      { className: "launchpad-tabs" },
       dom.h3({}, "Configurations"),
       this.renderConfig(config),
       config.features ?
@@ -143,6 +145,6 @@ const Settings = React.createClass({
       ) : null
     );
   }
-});
+}
 
 module.exports = Settings;

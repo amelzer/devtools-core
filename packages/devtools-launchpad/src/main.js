@@ -3,6 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const React = require("react");
+const { Component } = React;
+const dom = require("react-dom-factories");
 const ReactDOM = require("react-dom");
 const { combineReducers } = require("redux");
 const configureStore = require("./utils/create-store");
@@ -10,23 +12,28 @@ const reducers = require("./reducers");
 
 const { bootstrap } = require("./index");
 
-const App = React.createClass({
-  displayName: "App",
-  propTypes: {},
-  render() {
-    return React.DOM.div({
-      style: {
-        margin: "100px auto",
-        "text-align": "center"
-      }
-    }, "Launchpad Connected");
+class App extends Component {
+  static get propTypes() {
+    return {};
   }
-});
+
+  render() {
+    return dom.div(
+      {
+        style: {
+          margin: "100px auto",
+          "text-align": "center"
+        }
+      },
+      "Launchpad Connected"
+    );
+  }
+}
 
 const createStore = configureStore({
   log: false,
   makeThunkArgs: (args, state) => {
-    return Object.assign({}, args, { });
+    return Object.assign({}, args, {});
   }
 });
 
@@ -45,4 +52,6 @@ async function onConnect(connection: Object) {
   }
 }
 
-bootstrap(React, ReactDOM, App, null, store).then(onConnect);
+bootstrap(React, ReactDOM, App, null, store)
+  .then(onConnect)
+  .catch(err => console.log(err));

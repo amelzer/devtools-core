@@ -9,11 +9,17 @@ const { Provider } = require("react-redux");
 
 const { defer } = require("./utils/defer");
 const { debugGlobal } = require("./utils/debug");
-const { setConfig, getValue, isDevelopment } = require("devtools-config");
+const { setConfig, getValue } = require("devtools-config");
+const { isDevelopment } = require("devtools-environment");
 const L10N = require("./utils/L10N");
-const { showMenu, buildMenu } = require("./components/shared/menu");
+const { showMenu, buildMenu } = require("devtools-contextmenu");
 
 setConfig(DebuggerConfig);
+
+// List of theme class names to ignore when replacing a theme.
+// Certain nodes may contain multiple "theme-" classes and some of them we must
+// preserve.
+const IGNORE_THEME_CLASS_NAMES = ["theme-body"];
 
 // Set various flags before requiring app code.
 if (getValue("logging.client")) {
@@ -26,23 +32,51 @@ const Root = require("./components/Root");
 // Using this static variable allows webpack to know at compile-time
 // to avoid this require and not include it at all in the output.
 if (process.env.TARGET !== "firefox-panel") {
-  require("./lib/themes/dark-theme.css");
-  require("./lib/themes/light-theme.css");
-  require("./lib/themes/firebug-theme.css");
+  require("devtools-mc-assets/assets/devtools/client/themes/light-theme.css");
+  require("devtools-mc-assets/assets/devtools/client/themes/dark-theme.css");
+}
+
+function setThemeClassName(targetNode, newThemeClassName) {
+  // If one of the arguments is missing - bail out.
+  if (!targetNode || !newThemeClassName) {
+    return;
+  }
+
+  const { classList } = targetNode;
+
+  // Attempt to find the first theme class, assuming there's only one and
+  // ignoring class names from IGNORE_THEME_CLASS_NAMES array.
+  const activeThemeClassName = [...classList].find(
+    cls => cls.startsWith("theme-") && !IGNORE_THEME_CLASS_NAMES.includes(cls)
+  );
+
+  if (activeThemeClassName) {
+    classList.replace(activeThemeClassName, newThemeClassName);
+  } else {
+    classList.add(newThemeClassName);
+  }
 }
 
 function updateTheme() {
   if (process.env.TARGET !== "firefox-panel") {
-    const theme = getValue("theme");
-    const root = document.body.parentNode;
-    const appRoot = document.querySelector(".launchpad-root");
-
-    root.className = "";
-    appRoot.className = "launchpad-root";
-
-    root.classList.add(`theme-${theme}`);
-    appRoot.classList.add(`theme-${theme}`);
+    setThemeClassName(document.documentElement, `theme-${getValue("theme")}`);
   }
+}
+
+function updatePlatform() {
+  if (process.env.TARGET !== "firefox-panel") {
+    document.documentElement.setAttribute("platform", getPlatform());
+  }
+}
+
+function getPlatform() {
+  const agent = navigator.userAgent.toLowerCase();
+  if (agent.includes("windows")) {
+    return "win";
+  } else if (agent.includes("mac os")) {
+    return "mac";
+  }
+  return "linux";
 }
 
 function updateDir() {
@@ -53,7 +87,7 @@ function updateDir() {
 
 async function updateConfig() {
   const response = await fetch("/getconfig", {
-    method: "get",
+    method: "get"
   });
 
   const config = await response.json();
@@ -70,7 +104,7 @@ async function initApp() {
     log: getValue("logging.actions"),
     makeThunkArgs: (args, state) => {
       return Object.assign({}, args, {});
-    },
+    }
   });
 
   const store = createStore(combineReducers(reducers));
@@ -87,7 +121,7 @@ async function initApp() {
   return { store, actions, LaunchpadApp };
 }
 
-function renderRoot(_React, _ReactDOM, component, _store) {
+function renderRoot(_React, _ReactDOM, component, _store, props) {
   const { createElement } = _React;
   const mount = document.querySelector("#mount");
 
@@ -96,21 +130,27 @@ function renderRoot(_React, _ReactDOM, component, _store) {
     return;
   }
 
-  const root = Root("launchpad-root theme-body");
+  const className = "launchpad-root theme-body";
+  const root = Root(className);
   mount.appendChild(root);
-
-  if (component.props || component.propTypes) {
-    _ReactDOM.render(
-      createElement(Provider, { store: _store }, createElement(component)),
-      root,
-    );
-  } else {
-    root.appendChild(component);
-  }
 
   if (isDevelopment()) {
     updateConfig();
     updateTheme();
+    updatePlatform();
+  }
+
+  if (component.props || component.propTypes) {
+    _ReactDOM.render(
+      createElement(
+        Provider,
+        { store: _store },
+        createElement(component, props)
+      ),
+      root
+    );
+  } else {
+    root.appendChild(component);
   }
 }
 
@@ -146,7 +186,7 @@ async function connectClients(actions) {
 }
 
 async function getTabs(actions) {
-  const firefoxTabs = await firefox.getTabs();
+  const firefoxTabs = await firefox.connectClient();
   const chromeTabs = await chrome.connectClient();
   const nodeTabs = await chrome.connectNodeClient();
 
@@ -160,10 +200,15 @@ async function getTabs(actions) {
 async function bootstrap(React, ReactDOM) {
   const connTarget = getTargetFromQuery();
   if (connTarget) {
-    const { tab, tabConnection } = await startDebugging(connTarget);
+    const debuggedTarget = await startDebugging(connTarget);
 
-    await updateConfig();
-    return { tab, connTarget, tabConnection };
+    if (debuggedTarget) {
+      const { tab, tabConnection } = debuggedTarget;
+      await updateConfig();
+      return { tab, connTarget, tabConnection };
+    }
+
+    console.info("Tab closed due to missing debugged target window.");
   }
 
   const { store, actions, LaunchpadApp } = await initApp();
@@ -184,5 +229,5 @@ module.exports = {
   showMenu,
   unmountRoot,
   updateTheme,
-  updateDir,
+  updateDir
 };

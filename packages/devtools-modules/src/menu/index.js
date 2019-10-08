@@ -2,10 +2,51 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+import Services from "devtools-services";
+
+const { appinfo } = Services;
+
+const isMacOS = appinfo.OS === "Darwin";
+
 const EventEmitter = require("../utils/event-emitter");
 
+/**
+ * Formats key for use in tooltips
+ * For macOS we use the following unicode
+ *
+ * cmd ⌘ = \u2318
+ * shift ⇧ – \u21E7
+ * option (alt) ⌥ \u2325
+ *
+ * For Win/Lin this replaces CommandOrControl or CmdOrCtrl with Ctrl
+ *
+ * @static
+ */
+function formatKeyShortcut(shortcut) {
+    if (isMacOS) {
+        return shortcut
+            .replace(/Shift\+/g, "\u21E7")
+            .replace(/Command\+|Cmd\+/g, "\u2318")
+            .replace(/CommandOrControl\+|CmdOrCtrl\+/g, "\u2318")
+            .replace(/Alt\+/g, "\u2325");
+    }
+    return shortcut
+        .replace(/CommandOrControl\+|CmdOrCtrl\+/g, `${L10N.getStr("ctrl")}+`)
+        .replace(/Shift\+/g, "Shift+");
+}
+
 function inToolbox() {
-  return window.parent.document.documentURI == "about:devtools-toolbox"
+  try {
+    return window.parent.document.documentURI.startsWith("about:devtools-toolbox");
+  } catch (e) {
+    // If `window` is not available, it's very likely that we are in the toolbox.
+    return true;
+  }
+}
+
+// Copied from m-c DevToolsUtils.
+function getTopWindow(win) {
+  return win.windowRoot ? win.windowRoot.ownerGlobal : win.top;
 }
 
 /**
@@ -59,12 +100,21 @@ Menu.prototype.insert = function (pos, menuItem) {
  *
  * @param {int} screenX
  * @param {int} screenY
- * @param Toolbox toolbox (non standard)
- *        Needed so we in which window to inject XUL
+ * @param {Document} doc
+ *        The document that should own the context menu.
  */
-Menu.prototype.popup = function (screenX, screenY, toolbox) {
-  let doc = toolbox.doc;
+Menu.prototype.popup = function (screenX, screenY, doc) {
+  // The context-menu will be created in the topmost window to preserve keyboard
+  // navigation. See Bug 1543940. Keep a reference on the window owning the menu to hide
+  // the popup on unload.
+  const win = doc.defaultView;
+  doc = getTopWindow(doc.defaultView).document;
+
   let popupset = doc.querySelector("popupset");
+  if (!popupset) {
+    popupset = doc.createXULElement("popupset");
+    doc.documentElement.appendChild(popupset);
+  }
   // See bug 1285229, on Windows, opening the same popup multiple times in a
   // row ends up duplicating the popup. The newly inserted popup doesn't
   // dismiss the old one. So remove any previously displayed popup before
@@ -82,9 +132,15 @@ Menu.prototype.popup = function (screenX, screenY, toolbox) {
   }
   this._createMenuItems(popup);
 
+  // The context menu will be created in the topmost chrome window. Hide it manually when
+  // the owner document is unloaded.
+  const onWindowUnload = () => popup.hidePopup();
+  win.addEventListener("unload", onWindowUnload);
+
   // Remove the menu from the DOM once it's hidden.
   popup.addEventListener("popuphidden", (e) => {
     if (e.target === popup) {
+      win.removeEventListener("unload", onWindowUnload);
       popup.remove();
       this.emit("close", popup);
     }
@@ -133,6 +189,9 @@ Menu.prototype._createMenuItems = function(parent) {
       if (item.id) {
         menu.id = item.id;
       }
+      if (item.accelerator) {
+        menuitem.setAttribute("acceltext", formatKeyShortcut(item.accelerator));
+      }
       parent.appendChild(menu);
     } else if (item.type === "separator") {
       let menusep = doc.createElement("menuseparator");
@@ -165,7 +224,9 @@ Menu.prototype._createMenuItems = function(parent) {
       if (item.id) {
         menuitem.id = item.id;
       }
-
+      if (item.accelerator) {
+        menuitem.setAttribute("acceltext", formatKeyShortcut(item.accelerator));
+      }
       parent.appendChild(menuitem);
     }
   });

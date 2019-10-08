@@ -1,22 +1,20 @@
 machine:
   node:
-    version: 7.0
+    version: 8.9.4
   environment:
     DOWNLOADS_PATH: "$HOME/downloads"
     YARN_PATH: "$HOME/.yarn"
-    YARN_VERSION: 0.24.5
+    YARN_VERSION: 0.28.4
     PATH: "${PATH}:${HOME}/.yarn/bin:${HOME}/${CIRCLE_PROJECT_REPONAME}/node_modules/.bin"
 
 test:
-  post:
-    - cd ./packages/devtools-launchpad; yarn test
-    - cd ./packages/devtools-source-map; yarn test
-    - cd ./packages/devtools-utils; yarn test
-    - cd ./packages/devtools-reps; yarn test
+  override:
     - yarn lint-css
     - yarn lint-js
     - yarn flow
     - yarn license-check
+    - cd ./packages/devtools-launchpad; yarn test
+    - cd ./packages/devtools-modules; yarn test
 
 dependencies:
   pre:
